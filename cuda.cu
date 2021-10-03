@@ -17,76 +17,76 @@
 
 using namespace std;
 
-__device__ float distance(ArffInstance* a, ArffInstance* b) {
-    float sum = 0;
+// __device__ float distance(ArffInstance* a, ArffInstance* b) {
+//     float sum = 0;
     
-    for (int i = 0; i < a->size()-1; i++) {
-        float diff = (a->get(i)->operator float() - b->get(i)->operator float());
-        sum += diff*diff;
-    }
+//     for (int i = 0; i < a->size()-1; i++) {
+//         float diff = (a->get(i)->operator float() - b->get(i)->operator float());
+//         sum += diff*diff;
+//     }
     
-    return sum;
-}
+//     return sum;
+// }
 
-__global__ void KNN(ArffData* train, ArffData* test, int k) {
-    // Implements a sequential kNN where for each candidate query an in-place priority queue is maintained to identify the kNN's.
+// __global__ void KNN(ArffData* train, ArffData* test, int k) {
+//     // Implements a sequential kNN where for each candidate query an in-place priority queue is maintained to identify the kNN's.
 
-    // predictions is the array where you have to return the class predicted (integer) for the test dataset instances
-    int* predictions = (int*)malloc(test->num_instances() * sizeof(int));
+//     // predictions is the array where you have to return the class predicted (integer) for the test dataset instances
+//     int* predictions = (int*)malloc(test->num_instances() * sizeof(int));
 
-    // stores k-NN candidates for a query vector as a sorted 2d array. First element is inner product, second is class.
-    float* candidates = (float*) calloc(k*2, sizeof(float));
-    for(int i = 0; i < 2*k; i++){ candidates[i] = FLT_MAX; }
+//     // stores k-NN candidates for a query vector as a sorted 2d array. First element is inner product, second is class.
+//     float* candidates = (float*) calloc(k*2, sizeof(float));
+//     for(int i = 0; i < 2*k; i++){ candidates[i] = FLT_MAX; }
 
-    int num_classes = train->num_classes();
+//     int num_classes = train->num_classes();
 
-    // Stores bincounts of each class over the final set of candidate NN
-    int* classCounts = (int*)calloc(num_classes, sizeof(int));
+//     // Stores bincounts of each class over the final set of candidate NN
+//     int* classCounts = (int*)calloc(num_classes, sizeof(int));
 
-    for(int queryIndex = 0; queryIndex < test->num_instances(); queryIndex++) {
-        for(int keyIndex = 0; keyIndex < train->num_instances(); keyIndex++) {
+//     for(int queryIndex = 0; queryIndex < test->num_instances(); queryIndex++) {
+//         for(int keyIndex = 0; keyIndex < train->num_instances(); keyIndex++) {
             
-            float dist = distance(test->get_instance(queryIndex), train->get_instance(keyIndex));
+//             float dist = distance(test->get_instance(queryIndex), train->get_instance(keyIndex));
 
-            // Add to our candidates
-            for(int c = 0; c < k; c++){
-                if(dist < candidates[2*c]){
-                    // Found a new candidate
-                    // Shift previous candidates down by one
-                    for(int x = k-2; x >= c; x--) {
-                        candidates[2*x+2] = candidates[2*x];
-                        candidates[2*x+3] = candidates[2*x+1];
-                    }
+//             // Add to our candidates
+//             for(int c = 0; c < k; c++){
+//                 if(dist < candidates[2*c]){
+//                     // Found a new candidate
+//                     // Shift previous candidates down by one
+//                     for(int x = k-2; x >= c; x--) {
+//                         candidates[2*x+2] = candidates[2*x];
+//                         candidates[2*x+3] = candidates[2*x+1];
+//                     }
                     
-                    // Set key vector as potential k NN
-                    candidates[2*c] = dist;
-                    candidates[2*c+1] = train->get_instance(keyIndex)->get(train->num_attributes() - 1)->operator float(); // class value
+//                     // Set key vector as potential k NN
+//                     candidates[2*c] = dist;
+//                     candidates[2*c+1] = train->get_instance(keyIndex)->get(train->num_attributes() - 1)->operator float(); // class value
 
-                    break;
-                }
-            }
-        }
+//                     break;
+//                 }
+//             }
+//         }
 
-        // Bincount the candidate labels and pick the most common
-        for(int i = 0; i < k;i++){
-            classCounts[(int)candidates[2*i+1]] += 1;
-        }
+//         // Bincount the candidate labels and pick the most common
+//         for(int i = 0; i < k;i++){
+//             classCounts[(int)candidates[2*i+1]] += 1;
+//         }
         
-        int max = -1;
-        int max_index = 0;
-        for(int i = 0; i < num_classes;i++){
-            if(classCounts[i] > max){
-                max = classCounts[i];
-                max_index = i;
-            }
-        }
+//         int max = -1;
+//         int max_index = 0;
+//         for(int i = 0; i < num_classes;i++){
+//             if(classCounts[i] > max){
+//                 max = classCounts[i];
+//                 max_index = i;
+//             }
+//         }
 
-        predictions[queryIndex] = max_index;
+//         predictions[queryIndex] = max_index;
 
-        for(int i = 0; i < 2*k; i++){ candidates[i] = FLT_MAX; }
-        memset(classCounts, 0, num_classes * sizeof(int));
-    }
-}
+//         for(int i = 0; i < 2*k; i++){ candidates[i] = FLT_MAX; }
+//         memset(classCounts, 0, num_classes * sizeof(int));
+//     }
+// }
 
 int* computeConfusionMatrix(int* predictions, ArffData* dataset)
 {
@@ -127,34 +127,35 @@ int main(int argc, char *argv[]){
 
     int numAttr = train->num_attributes();
     int numClasses = train->num_classes();
-    int instanceSizes[2] = {train->num_instances(), test->num_instances()};
+    int instanceSizes[2] = {(int) train->num_instances(), (int) test->num_instances()};
 
     // Allocate host memory
-    float (*h_train_instances)[numAttr] = malloc(sizeof(float[instanceSizes[0]][numAttr]));
-    float (*h_test_instances)[numAttr] = malloc(sizeof(float[instanceSizes[1]][numAttr]));
+    // float (*h_train_instances)[numAttr] = (float * [numAttr]) malloc(sizeof(float[instanceSizes[0]][numAttr]));
+    float *h_train_instances = (float *) malloc(instanceSizes[0] * numAttr * sizeof(float));
+    // float (*h_test_instances)[numAttr] = (float * [numAttr]) malloc(sizeof(float[instanceSizes[1]][numAttr]));
+    float *h_test_instances = (float *) malloc(instanceSizes[1] * numAttr * sizeof(float));
     int* h_predictions = (int*) malloc(instanceSizes[1] * sizeof(int));
 
     for(int i = 0; i < instanceSizes[0]; i++) {
         for(int j = 0; j < numAttr; j++) {
-            h_train_instances[i][j] = train->get_instance(i)->get(j)->operator float();
+            h_train_instances[i * numAttr + j] = train->get_instance(i)->get(j)->operator float();
 
             if(i < instanceSizes[1])
-                h_test_instances[i][j] = test->get_instance(i)->get(j)->operator float();
+                h_test_instances[i * numAttr + j] = test->get_instance(i)->get(j)->operator float();
         }
     }
 
     // Allocate device memory
-    float (*d_train_instances)[numAttr];
-    float (*d_test_instances)[numAttr];
+    float *d_train_instances, *d_test_instances;
     int *d_predictions;
 
-    cudaMalloc(&d_train_instances, sizeof(float[instanceSizes[0]][numAttr]));
-    cudaMalloc(&d_test_instances, sizeof(float[instanceSizes[1]][numAttr]));
+    cudaMalloc(&d_train_instances, instanceSizes[0] * numAttr * sizeof(float));
+    cudaMalloc(&d_test_instances, instanceSizes[1] * numAttr * sizeof(float));
     cudaMalloc(&d_predictions, instanceSizes[1] * sizeof(int));
 
     // Copy host memory to device memory
-    cudaMemcpy(d_train_instances, h_train_instances, sizeof(float[instanceSizes[0]][numAttr]), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_test_instances, h_test_instances, sizeof(float[instanceSizes[1]][numAttr]), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_train_instances, h_train_instances, instanceSizes[0] * numAttr * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_test_instances, h_test_instances, instanceSizes[1] * numAttr * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_predictions, h_predictions, instanceSizes[1] * sizeof(int), cudaMemcpyHostToDevice);
 
     // Configure the blocks and grid sizes
@@ -178,11 +179,11 @@ int main(int argc, char *argv[]){
     // Transfer device results to host memory
 
     // Compute the confusion matrix
-    int* confusionMatrix = computeConfusionMatrix(predictions, test);
+    // int* confusionMatrix = computeConfusionMatrix(predictions, test);
     // Calculate the accuracy
-    float accuracy = computeAccuracy(confusionMatrix, test);
+    // float accuracy = computeAccuracy(confusionMatrix, test);
 
-    printf("The %i-NN classifier for %lu test instances on %lu train instances required %f ms CPU time. Accuracy was %.4f\n", k, test->num_instances(), train->num_instances(), milliseconds, accuracy);
+    // printf("The %i-NN classifier for %lu test instances on %lu train instances required %f ms CPU time. Accuracy was %.4f\n", k, test->num_instances(), train->num_instances(), milliseconds, accuracy);
 
     // Free memory
     cudaFree(d_train_instances);
