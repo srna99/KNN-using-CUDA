@@ -17,7 +17,7 @@
 
 using namespace std;
 
-float distance(ArffInstance* a, ArffInstance* b) {
+__device__ float distance(ArffInstance* a, ArffInstance* b) {
     float sum = 0;
     
     for (int i = 0; i < a->size()-1; i++) {
@@ -28,7 +28,7 @@ float distance(ArffInstance* a, ArffInstance* b) {
     return sum;
 }
 
-int* KNN(ArffData* train, ArffData* test, int k) {
+__global__ void KNN(ArffData* train, ArffData* test, int k) {
     // Implements a sequential kNN where for each candidate query an in-place priority queue is maintained to identify the kNN's.
 
     // predictions is the array where you have to return the class predicted (integer) for the test dataset instances
@@ -86,8 +86,6 @@ int* KNN(ArffData* train, ArffData* test, int k) {
         for(int i = 0; i < 2*k; i++){ candidates[i] = FLT_MAX; }
         memset(classCounts, 0, num_classes * sizeof(int));
     }
-    
-    return predictions;
 }
 
 int* computeConfusionMatrix(int* predictions, ArffData* dataset)
@@ -119,12 +117,6 @@ float computeAccuracy(int* confusionMatrix, ArffData* dataset)
 
 int main(int argc, char *argv[]){
 
-    if(argc != 4)
-    {
-        cout << "Usage: ./main datasets/train.arff datasets/test.arff k" << endl;
-        exit(0);
-    }
-
     int k = strtol(argv[3], NULL, 10);
 
     // Open the datasets
@@ -132,22 +124,73 @@ int main(int argc, char *argv[]){
     ArffParser parserTest(argv[2]);
     ArffData *train = parserTrain.parse();
     ArffData *test = parserTest.parse();
+
+    int numAttr = train->num_attributes();
+    int numClasses = train->num_classes();
+    int instanceSizes[2] = {train->num_instances(), test->num_instances()};
+
+    // Allocate host memory
+    float (*h_train_instances)[numAttr] = malloc(sizeof(float[instanceSizes[0]][numAttr]));
+    float (*h_test_instances)[numAttr] = malloc(sizeof(float[instanceSizes[1]][numAttr]));
+    int* h_predictions = (int*) malloc(instanceSizes[1] * sizeof(int));
+
+    for(int i = 0; i < instanceSizes[0]; i++) {
+        for(int j = 0; j < numAttr; j++) {
+            h_train_instances[i][j] = train->get_instance(i)->get(j)->operator float();
+
+            if(i < instanceSizes[1])
+                h_test_instances[i][j] = test->get_instance(i)->get(j)->operator float();
+        }
+    }
+
+    // Allocate device memory
+    float (*d_train_instances)[numAttr];
+    float (*d_test_instances)[numAttr];
+    int *d_predictions;
+
+    cudaMalloc(&d_train_instances, sizeof(float[instanceSizes[0]][numAttr]));
+    cudaMalloc(&d_test_instances, sizeof(float[instanceSizes[1]][numAttr]));
+    cudaMalloc(&d_predictions, instanceSizes[1] * sizeof(int));
+
+    // Copy host memory to device memory
+    cudaMemcpy(d_train_instances, h_train_instances, sizeof(float[instanceSizes[0]][numAttr]), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_test_instances, h_test_instances, sizeof(float[instanceSizes[1]][numAttr]), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_predictions, h_predictions, instanceSizes[1] * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Configure the blocks and grid sizes
+    int threadsPerBlock = 32;
+	int gridSize = (instanceSizes[1] + threadsPerBlock - 1) / threadsPerBlock;
     
-    struct timespec start, end;
-    int* predictions = NULL;
+    float milliseconds = 0;
+    cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
     
-    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    // Launch the kernel function
+    // KNN<<<gridSize, threadsPerBlock>>>(train, test, k);
     
-    predictions = KNN(train, test, k);
-    
-    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&milliseconds, start, stop);
+
+    // Transfer device results to host memory
 
     // Compute the confusion matrix
     int* confusionMatrix = computeConfusionMatrix(predictions, test);
     // Calculate the accuracy
     float accuracy = computeAccuracy(confusionMatrix, test);
 
-    uint64_t diff = (1000000000L * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec) / 1e6;
+    printf("The %i-NN classifier for %lu test instances on %lu train instances required %f ms CPU time. Accuracy was %.4f\n", k, test->num_instances(), train->num_instances(), milliseconds, accuracy);
 
-    printf("The %i-NN classifier for %lu test instances on %lu train instances required %llu ms CPU time. Accuracy was %.4f\n", k, test->num_instances(), train->num_instances(), (long long unsigned int) diff, accuracy);
+    // Free memory
+    cudaFree(d_train_instances);
+	cudaFree(d_test_instances);
+	cudaFree(d_predictions);
+	free(h_train_instances);
+	free(h_test_instances);
+	free(h_predictions);
+
+    return 0;
 }
