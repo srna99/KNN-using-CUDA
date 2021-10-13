@@ -163,8 +163,8 @@ int main(int argc, char *argv[]) {
     cudaMemcpy(d_candidates, h_candidates, datasetSizes[1] * k * 2 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_dataset_sizes, datasetSizes, 2 * sizeof(int), cudaMemcpyHostToDevice);
 
-    // Configure the block and grid sizes
-    int threadsPerBlock = 128;
+    // Configure with different block and grid sizes
+    int threadsPerBlock = 1024;
     int gridSize = (datasetSizes[1] + threadsPerBlock - 1) / threadsPerBlock;
 
     // Launch the kernel function

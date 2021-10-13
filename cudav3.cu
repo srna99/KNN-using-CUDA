@@ -28,33 +28,47 @@ __device__ float distance(float *a, float *b, int size) {
     return sum;
 }
 
-__global__ void KNN(float *train, float *test, int *predictions, float *candidates, int *classCounts, int *datasetSizes , int k, int numAttr, int numClasses) {
+__global__ void KNN(float *train, float *test, int *predictions, int *datasetSizes, int k, int numAttr, int numClasses) {
     // Implements a sequential kNN where for each candidate query an in-place priority queue is maintained to identify the kNN's.
+
+    __shared__ float candidates[800];
+    __shared__ int classCounts[1300];
 
     int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
     if(tid < datasetSizes[1]) {
-        int candidateForTid = tid * 2 * k;
+        for(int i = 0; i < 128 * numClasses; i++) {
+            classCounts[i] = 0;
+
+            if(i < 128 * k * 2)
+                candidates[i] = FLT_MAX;
+        }
+
+        __syncthreads();
+
+        int candidateForThread = threadIdx.x * 2 * k;
 
         for (int keyIndex = 0; keyIndex < datasetSizes[0] * numAttr; keyIndex += numAttr) {
             float dist = distance(test + tid * numAttr, train + keyIndex, numAttr);
 
             // Add to our candidates
             for (int c = 0; c < k; c++) {
-                if (dist < candidates[candidateForTid + 2 * c]) {
+                if (dist < candidates[candidateForThread + 2 * c]) {
                     // Found a new candidate
                     // Shift previous candidates down by one
                     for (int x = k - 2; x >= c; x--) {
-                        candidates[candidateForTid + 2 * x + 2] = candidates[candidateForTid + 2 * x];
-                        candidates[candidateForTid + 2 * x + 3] = candidates[candidateForTid + 2 * x + 1];
+                        candidates[candidateForThread + 2 * x + 2] = candidates[candidateForThread + 2 * x];
+                        candidates[candidateForThread + 2 * x + 3] = candidates[candidateForThread + 2 * x + 1];
                     }
 
                     // Set key vector as potential k NN
-                    candidates[candidateForTid + 2 * c] = dist;
-                    candidates[candidateForTid + 2 * c + 1] = train[keyIndex + numAttr - 1];
+                    candidates[candidateForThread + 2 * c] = dist;
+                    candidates[candidateForThread + 2 * c + 1] = train[keyIndex + numAttr - 1];
 
                     break;
                 }
+
+                __syncthreads();
             }
         }
 
@@ -62,15 +76,16 @@ __global__ void KNN(float *train, float *test, int *predictions, float *candidat
         int classOfCandidate;
 
         for (int i = 0; i < k; i++) {
-            classOfCandidate = (int) candidates[candidateForTid + 2 * i + 1];
-            classCounts[classOfCandidate + tid * numClasses] += 1;
+            classOfCandidate = (int) candidates[candidateForThread + 2 * i + 1];
+            classCounts[classOfCandidate + threadIdx.x * numClasses] += 1;
+            __syncthreads();
         }
 
         int max = -1;
         int max_index = 0;
         for (int i = 0; i < numClasses; i++) {
-            if (classCounts[i + tid * numClasses] > max) {
-                max = classCounts[i + tid * numClasses];
+            if (classCounts[i + threadIdx.x * numClasses] > max) {
+                max = classCounts[i + threadIdx.x * numClasses];
                 max_index = i;
             }
         }
@@ -119,7 +134,6 @@ int main(int argc, char *argv[]) {
     float *h_train_instances = (float *) malloc(datasetSizes[0] * numAttr * sizeof(float));
     float *h_test_instances = (float *) malloc(datasetSizes[1] * numAttr * sizeof(float));
     int *h_predictions = (int *) malloc(datasetSizes[1] * sizeof(int));
-    float *h_candidates = (float *) malloc(datasetSizes[1] * k * 2 * sizeof(float));
 
     for (int i = 0; i < datasetSizes[0]; i++) {
         for (int j = 0; j < numAttr; j++) {
@@ -130,24 +144,14 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    for (int i = 0; i < datasetSizes[1] * 2 * k; i++) {
-        h_candidates[i] = FLT_MAX;
-    }
-
     // Allocate device memory
     float *d_train_instances, *d_test_instances;
-    int *d_predictions;
-    float *d_candidates; 
-    int *d_class_counts, *d_dataset_sizes; 
+    int *d_predictions, *d_dataset_sizes; 
 
     cudaMalloc(&d_train_instances, datasetSizes[0] * numAttr * sizeof(float));
     cudaMalloc(&d_test_instances, datasetSizes[1] * numAttr * sizeof(float));
     cudaMalloc(&d_predictions, datasetSizes[1] * sizeof(int));
-    cudaMalloc(&d_candidates, datasetSizes[1] * k * 2 * sizeof(float));
-    cudaMalloc(&d_class_counts, datasetSizes[1] * numClasses * sizeof(int));
     cudaMalloc(&d_dataset_sizes, 2 * sizeof(int));
-
-    cudaMemset(d_class_counts, 0, datasetSizes[1] * numClasses * sizeof(int));
 
     float milliseconds = 0;
     cudaEvent_t start, stop;
@@ -160,15 +164,14 @@ int main(int argc, char *argv[]) {
     cudaMemcpy(d_train_instances, h_train_instances, datasetSizes[0] * numAttr * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_test_instances, h_test_instances, datasetSizes[1] * numAttr * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_predictions, h_predictions, datasetSizes[1] * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_candidates, h_candidates, datasetSizes[1] * k * 2 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_dataset_sizes, datasetSizes, 2 * sizeof(int), cudaMemcpyHostToDevice);
 
-    // Configure the block and grid sizes
+    // Configure the blocks and grid sizes
     int threadsPerBlock = 128;
     int gridSize = (datasetSizes[1] + threadsPerBlock - 1) / threadsPerBlock;
 
     // Launch the kernel function
-    KNN<<<gridSize, threadsPerBlock>>>(d_train_instances, d_test_instances, d_predictions, d_candidates, d_class_counts, d_dataset_sizes, k, numAttr, numClasses);
+    KNN<<<gridSize, threadsPerBlock>>>(d_train_instances, d_test_instances, d_predictions, d_dataset_sizes, k, numAttr, numClasses);
 
     // Transfer device results to host memory
     cudaMemcpy(h_predictions, d_predictions, datasetSizes[1] * sizeof(int), cudaMemcpyDeviceToHost);
@@ -196,12 +199,9 @@ int main(int argc, char *argv[]) {
     cudaFree(d_test_instances);
     cudaFree(d_predictions);
     cudaFree(d_dataset_sizes);
-    cudaFree(d_candidates);
-    cudaFree(d_class_counts);
     free(h_train_instances);
     free(h_test_instances);
     free(h_predictions);
-    free(h_candidates);
 
     return 0;
 }
